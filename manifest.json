@@ -1,6 +1,6 @@
 {
-  "name": "Control Financiero",
-  "short_name": "Finanzas",
+  "name": "LeisterProject",
+  "short_name": "LeisterProject",
   "description": "Tu control de gastos, pagos, suscripciones y capital, siempre contigo.",
   "start_url": "./",
   "scope": "./",

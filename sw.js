@@ -2,7 +2,7 @@
    Guarda el "esqueleto" de la app (el HTML, los iconos y las fuentes) para que
    abra al instante y funcione sin conexión. Los datos del usuario viven en
    localStorage, así que no pasan por aquí. */
-const CACHE = 'cf-v1';
+const CACHE = 'cf-v2';
 const CORE = [
   './',
   'index.html',
