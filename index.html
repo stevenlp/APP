@@ -2197,6 +2197,11 @@ html[data-nav="back"]::view-transition-new(root){ animation:tabInBack var(--dur-
   background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-full);padding:7px 12px;}
 .nb-range label span{font-size:10px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.03em;}
 .nb-range input{flex:1;min-width:0;border:none;background:none;outline:none;font-family:var(--font);font-size:12.5px;color:var(--ink);}
+.nb-search-wrap{display:flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-full);padding:10px 14px;margin-bottom:10px;}
+.nb-search-wrap .nb-search-ico{flex:none;color:var(--ink-soft);}
+.nb-search-wrap input{flex:1;min-width:0;border:none;background:none;outline:none;font-family:var(--font);font-size:13.5px;color:var(--ink);}
+.nb-search-wrap input::placeholder{color:var(--ink-faint);}
+.nb-search-clr{background:none;border:none;cursor:pointer;color:var(--ink-soft);padding:0;line-height:1;display:flex;}
 .nb-fchips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:6px;}
 .nb-fchip{border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);font-family:var(--font);
   font-size:11.5px;font-weight:700;border-radius:var(--r-full);padding:7px 13px;cursor:pointer;
@@ -6055,6 +6060,7 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
   let nbFrom = '', nbTo = '';   /* filtro de fechas del historial */
   let nbTipoFiltro = 'todos';   /* todos · gastos · inversiones · ingresos */
   let nbHistLimit = 25;
+  let nbBuscador = '';          /* texto libre del buscador del historial */
   /* El valor del balance va cambiando solo entre euros y porcentaje. */
   let nbFlipPct = false, nbFlipTimer = null;
 
@@ -6662,14 +6668,17 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
   function nbHistorialFiltrado(){
     const desdeTs = nbFrom ? new Date(nbFrom + 'T00:00:00').getTime() : null;
     const hastaTs = nbTo   ? new Date(nbTo   + 'T23:59:59').getTime() : null;
+    const q = nbBuscador.trim().toLowerCase();
     const todo = state.transactions.concat(
       (nbTipoFiltro === 'todos' || nbTipoFiltro === 'reembolsos') ? nbReembolsosComoFilas() : []);
     return todo.sort((a,b)=>b.ts - a.ts).filter(t=>{
       if(desdeTs != null && t.ts < desdeTs) return false;
       if(hastaTs != null && t.ts > hastaTs) return false;
       if(nbTipoFiltro === 'reembolsos') return !!t.esReembolso;
-      if(t.esReembolso) return nbTipoFiltro === 'todos';
-      return nbEsTipo(t, nbTipoFiltro);
+      if(t.esReembolso && nbTipoFiltro !== 'todos') return false;
+      if(!nbEsTipo(t, nbTipoFiltro)) return false;
+      if(q) return nbCoincide(t, q);
+      return true;
     });
   }
 
@@ -6711,6 +6720,11 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
         <label><span>Desde</span><input type="date" id="nbFrom" value="${escapeHTML(nbFrom)}"></label>
         <label><span>Hasta</span><input type="date" id="nbTo" value="${escapeHTML(nbTo)}"></label>
       </div>
+      <div class="nb-search-wrap">
+        <span class="nb-search-ico">${ic('search',14)}</span>
+        <input type="search" id="nbBuscador" placeholder="Buscar por categoría, descripción…" value="${escapeHTML(nbBuscador)}" autocomplete="off" />
+        ${nbBuscador ? `<button type="button" class="nb-search-clr" id="nbSearchClr">${ic('close',11)}</button>` : ''}
+      </div>
       <div class="nb-fchips">
         ${chip('todos','globe','Todo')}
         ${chip('ingresos','arrowDown','Ingresos')}
@@ -6736,6 +6750,14 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
     </div>`);
 
     const cont = sheetBody;
+    const busca = cont.querySelector('#nbBuscador');
+    if(busca){
+      busca.oninput = ()=>{ nbBuscador = busca.value; nbHistLimit = 25; abreHistorialSheet(); };
+      /* Mantiene el foco en el buscador tras cada redibujado */
+      if(nbBuscador) setTimeout(()=>{ busca.focus(); busca.setSelectionRange(busca.value.length, busca.value.length); }, 50);
+    }
+    const searchClr = cont.querySelector('#nbSearchClr');
+    if(searchClr) searchClr.onclick = ()=>{ nbBuscador = ''; nbHistLimit = 25; abreHistorialSheet(); };
     const desde = cont.querySelector('#nbFrom');
     if(desde) desde.onchange = ()=>{ nbFrom = desde.value; nbHistLimit = 25; abreHistorialSheet(); };
     const hasta = cont.querySelector('#nbTo');
@@ -6748,7 +6770,7 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
     const mas = cont.querySelector('#nbMore');
     if(mas) mas.onclick = ()=>{ nbHistLimit += 25; abreHistorialSheet(); };
     const cerrar = cont.querySelector('#nbHistCerrar');
-    if(cerrar) cerrar.onclick = closeOverlay;
+    if(cerrar) cerrar.onclick = ()=>{ nbBuscador = ''; closeOverlay(); };
     nbBindFilas(cont);
   }
 
@@ -6982,10 +7004,73 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
   }
 
   /* Abrir y cerrar la ficha de cada movimiento, y borrarlo desde dentro. */
+  /* ---- Edición de un movimiento desde el historial ---- */
+  function abreEditarMovimiento(id){
+    const t = state.transactions.find(x=>x.id===id);
+    if(!t || t.transfer || t.esReembolso) return;
+    const acc = accountMeta(t.account);
+    const d = new Date(t.ts);
+    const pad = n=>String(n).padStart(2,'0');
+    const dateVal = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const timeVal = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const todayMax = new Date().toISOString().slice(0,10);
+    openOverlay(`
+      <h3>${ic('edit',16)} Editar movimiento</h3>
+      <div class="field-label">Categoría</div>
+      <input type="text" id="editCat" value="${escapeHTML(t.category||'')}" style="width:100%;padding:13px 14px;border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:15px;font-family:var(--font);box-sizing:border-box;" />
+      <div class="field-label" style="margin-top:12px;">Descripción</div>
+      <input type="text" id="editDesc" value="${escapeHTML(t.description||'')}" style="width:100%;padding:13px 14px;border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:15px;font-family:var(--font);box-sizing:border-box;" />
+      <div class="field-label" style="margin-top:12px;">Nota</div>
+      <input type="text" id="editNote" value="${escapeHTML(t.note||'')}" style="width:100%;padding:13px 14px;border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:15px;font-family:var(--font);box-sizing:border-box;" />
+      <div class="field-label" style="margin-top:12px;">Importe (€)</div>
+      <input type="number" inputmode="decimal" id="editAmt" value="${t.amount}" min="0.01" style="width:100%;padding:13px 14px;border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:15px;font-family:var(--font);box-sizing:border-box;" />
+      <div class="field-label" style="margin-top:12px;">Fecha</div>
+      <input type="date" id="editDate" value="${dateVal}" max="${todayMax}" style="width:100%;padding:13px 14px;border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:15px;font-family:var(--font);box-sizing:border-box;" />
+      <div class="field-label" style="margin-top:12px;">Hora</div>
+      <input type="time" id="editTime" value="${timeVal}" style="width:100%;padding:13px 14px;border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:15px;font-family:var(--font);box-sizing:border-box;" />
+      <p style="font-size:11.5px;color:var(--ink-soft);margin:10px 0 0;">Cuenta: <b>${escapeHTML(acc.label)}</b></p>
+      <div class="sheet-actions">
+        <button class="ghost-btn" id="editBack">Cancelar</button>
+        <button class="primary-btn glass-tap" id="editSave" style="margin-top:0;">Guardar cambios</button>
+      </div>`);
+    sheetBody.querySelector('#editBack').onclick = closeOverlay;
+    sheetBody.querySelector('#editSave').onclick = async ()=>{
+      const cat  = sheetBody.querySelector('#editCat').value.trim();
+      const desc = sheetBody.querySelector('#editDesc').value.trim();
+      const note = sheetBody.querySelector('#editNote').value.trim();
+      const amt  = parseFloat(sheetBody.querySelector('#editAmt').value);
+      const dv   = sheetBody.querySelector('#editDate').value;
+      const tv   = sheetBody.querySelector('#editTime').value || '00:00';
+      if(!cat){ showToast('La categoría no puede quedar vacía.', true); return; }
+      if(!(amt > 0)){ showToast('El importe debe ser mayor que cero.', true); return; }
+      if(!dv){ showToast('La fecha no puede quedar vacía.', true); return; }
+      const [y,mo,dy] = dv.split('-').map(Number);
+      const [h,mi] = tv.split(':').map(Number);
+      const newTs = new Date(y, mo-1, dy, h, mi).getTime();
+      /* Ajusta el saldo de la cuenta si el importe cambia */
+      const diff = amt - t.amount;
+      if(diff !== 0){
+        const delta = t.kind === 'ingreso' ? diff : -diff;
+        adjustAccount(t.account, delta);
+      }
+      t.category = cat; t.description = desc; t.note = note;
+      t.amount = +amt.toFixed(2); t.ts = newTs;
+      await saveState(); render();
+      closeOverlay();
+      showToast('Movimiento actualizado.');
+    };
+  }
+
   function nbBindFilas(cont){
     cont.querySelectorAll('[data-row]').forEach(el=>{
+      attachLongPress(el, ()=>{
+        const k = el.dataset.row;
+        const id = k.includes(':') ? k.split(':').slice(1).join(':') : k;
+        abreEditarMovimiento(id);
+      }, 4000);
       el.onclick = ()=>{
         if(editMode) return;
+        if(wasLongPress(el)) return;
         const k = el.dataset.row;
         nbOpenRow[k] = !nbOpenRow[k];
         const x = cont.querySelector('[data-rowx="' + CSS.escape(k) + '"]');
@@ -8680,7 +8765,7 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
        la arma para borrarla. El orden de estas guardas es lo que impide que un
        pulsado largo abra además el detalle. */
     root.querySelectorAll('[data-pid]').forEach(el=>{
-      attachLongPress(el, ()=>{ armedPlatformId = el.dataset.pid; renderCarteras(); });
+      attachLongPress(el, ()=>{ armedPlatformId = el.dataset.pid; renderCarteras(); }, 6000);
       el.addEventListener('click', ()=>{
         if(wasLongPress(el)) return;
         if(armedPlatformId===el.dataset.pid){ armedPlatformId=null; renderCarteras(); return; }
@@ -8705,8 +8790,13 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
         pila.classList.toggle('lifting', !!el);
       };
       const bajo = (x, y)=>{ const e = document.elementFromPoint(x, y); return e ? e.closest('#platStack .metal-card') : null; };
+      let liftRaf = null;
+      const marcaThrottle = (x, y)=>{
+        if(liftRaf) return;
+        liftRaf = requestAnimationFrame(()=>{ liftRaf=null; marca(bajo(x,y)); });
+      };
       pila.addEventListener('touchstart', e=>{ const t = e.touches[0]; marca(bajo(t.clientX, t.clientY)); }, {passive:true});
-      pila.addEventListener('touchmove', e=>{ const t = e.touches[0]; marca(bajo(t.clientX, t.clientY)); }, {passive:true});
+      pila.addEventListener('touchmove', e=>{ const t = e.touches[0]; marcaThrottle(t.clientX, t.clientY); }, {passive:true});
       ['touchend','touchcancel'].forEach(ev=>pila.addEventListener(ev, ()=>setTimeout(()=>marca(null), 180), {passive:true}));
     }
     /* A partir de aquí las tarjetas ya están repartidas: no se vuelven a
@@ -9665,7 +9755,7 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
       };
     });
     root.querySelectorAll('[data-subid]').forEach(el=>{
-      attachLongPress(el, ()=>{ armedSubId = el.dataset.subid; armedSubAt = Date.now(); renderSuscripciones(); });
+      attachLongPress(el, ()=>{ armedSubId = el.dataset.subid; armedSubAt = Date.now(); renderSuscripciones(); }, 6000);
     });
     root.querySelectorAll('[data-delconfirm-sub]').forEach(el=>{
       el.onclick = (e)=>{
@@ -10221,7 +10311,9 @@ main:has(> .wallet-tabs-wrap:not(.sub-switch)) .wallet-lead .pc-head .wl-k{margi
       root.querySelectorAll('[data-work]').forEach(b=>{
         b.onclick = ()=>{
           onboardDraft.trabajando = b.dataset.work === '1';
-          renderOnboarding();
+          /* Aplaza el render un frame para que el botón termine su animación
+             visual antes de que el DOM se destruya: evita el lag/parpadeo. */
+          requestAnimationFrame(renderOnboarding);
         };
       });
       document.getElementById('workBack').onclick = ()=>{ onboardStep = 1; renderOnboarding(); };
